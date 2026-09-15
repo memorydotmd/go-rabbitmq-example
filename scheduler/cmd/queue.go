@@ -4,7 +4,7 @@ import (
 	"log"
 
 	amqp "github.com/rabbitmq/amqp091-go"
-	"github.com/tuanta7/image-upscaler/scheduler/internal/upscale"
+	"github.com/tuanta7/task-queues/scheduler/internal/upscale"
 )
 
 func declareQueue(ch *amqp.Channel, queueName string) error {

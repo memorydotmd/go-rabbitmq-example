@@ -11,11 +11,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5"
 	amqp "github.com/rabbitmq/amqp091-go"
-	"github.com/tuanta7/image-upscaler/scheduler/internal/transport/rest"
+	"github.com/tuanta7/task-queues/scheduler/internal/transport/rest"
 
-	"github.com/tuanta7/image-upscaler/scheduler/internal/config"
-	"github.com/tuanta7/image-upscaler/scheduler/internal/transport"
-	"github.com/tuanta7/image-upscaler/scheduler/internal/upscale"
+	"github.com/tuanta7/task-queues/scheduler/internal/config"
+	"github.com/tuanta7/task-queues/scheduler/internal/transport"
+	"github.com/tuanta7/task-queues/scheduler/internal/upscale"
 )
 
 func main() {
