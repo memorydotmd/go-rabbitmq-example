@@ -17,7 +17,7 @@ python -m app.upscale_handler photo.png photo_big.png --scale 3 --weights fsrcnn
 - **Tensor**: PyTorch's array type, like a numpy array, images are moved between numpy (what OpenCV uses) and tensors (what the model wants)
 - **Convolution** (Conv2d): A layer that slides a small filter over the image to detect local patterns (edges, textures). Almost all of FSRCNN is
   convolutions.
-- **Channels**: An image can be split into brightness (Y) and color (Cb, Cr) channels a.k.a the YCrCb color space. Human eyes are much more sensitive to brightness detail than color detail, so the model only upscales the brightness channel; color is upscaled with plain (bicubic) resizing. One channel (Y) instead of three (Y, Cb, Cr) makes the model small and fast.
+- **Channels**: An image can be split into brightness (Y) and color (Cb, Cr) channels a.k.a the YCrCb color space.
 - **Scale**: The upscaling factor (2x, 3x, 4x). It's baked into the last layer's shape, so each scale needs its own weights file
 
 ## Python Concepts
