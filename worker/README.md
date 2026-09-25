@@ -1,99 +1,84 @@
-# Worker
+# Node.js image worker
 
-FSRCNN (Fast Super-Resolution Convolutional Neural Network) is a model tailored for real-time image super-resolution.
+Consumes RabbitMQ tasks, downloads images from S3/MinIO, upscales them with FSRCNN, and uploads PNG results. Runtime and repository tooling are JavaScript; no Python or CUDA installation is needed.
 
-Try it standalone, all pre-trained weights are from https://github.com/yjn870/FSRCNN-pytorch
+## Run
 
-```sh
-python -m app.upscale_handler photo.png photo_big.png --scale 3 --weights fsrcnn_x3.pth
-```
-
-## FSRCNN Concepts
-
-- **Model/Neural Network**: A function with millions of adjustable numbers (parameters) inside. You feed it an input (a small image), it produces an output (a bigger image). In code it's the `FSRCNN` class — a pipeline of layers the input flows through.
-- **Weights**: The learned values of those parameters.
-- **Training**: The process of finding good values.
-- **Inference**: Puts learned knowledge to work by making predictions.
-- **Tensor**: PyTorch's array type, like a numpy array, images are moved between numpy (what OpenCV uses) and tensors (what the model wants)
-- **Convolution** (Conv2d): A layer that slides a small filter over the image to detect local patterns (edges, textures). Almost all of FSRCNN is
-  convolutions.
-- **Channels**: An image can be split into brightness (Y) and color (Cb, Cr) channels a.k.a the YCrCb color space.
-- **Scale**: The upscaling factor (2x, 3x, 4x). It's baked into the last layer's shape, so each scale needs its own weights file
-
-## Python Concepts
-
-Quick glossary of the libraries used
-
-| Library           | What it does here                                          |
-| ----------------- | ---------------------------------------------------------- |
-| `torch` (PyTorch) | Defines and runs the neural network                        |
-| `cv2` (OpenCV)    | Reads/writes/encodes images, color conversion, resizing    |
-| `numpy`           | The array format images live in between OpenCV and PyTorch |
-| `pika`            | Talks to RabbitMQ (consume task messages, ack/reject)      |
-| `boto3`           | Talks to S3/MinIO (download inputs, upload results)        |
-
-### Virtual Environments
-
-Reference: [What are Virtual Environments?](https://fastapi.tiangolo.com/virtual-environments/#what-are-virtual-environments)
-
-A venv is a project-local folder of installed packages, so this project's dependency versions don't clash with other projects. Activate it
-before running anything.
+Requires Node.js 22.9 or newer and npm. Tested on Node.js 26.8.2, macOS ARM64. The native `sharp` and `onnxruntime-node` packages supply binaries for supported platforms; use a platform supported by both projects.
 
 ```sh
-uv venv                              # create .venv
-source .venv/bin/activate            # use it in this shell
-uv pip install -r requirements.txt   # install dependencies into it
-uv pip freeze > requirements.txt     # snapshot exact installed versions
+cd worker
+npm ci
+cp .env.example .env
+# Set your RabbitMQ and S3 connection details in .env.
+npm start
 ```
 
-### Modules and Imports
+The worker loads `.env` without overriding existing environment variables. See `.env.example` for defaults. `FAKE_DELAY` is a nonnegative number of seconds (default 5, use 0 for real processing timings). `UPSCALE_SCALE` must be 2, 3, or 4 and defaults to 3. All three bundled models load at startup. A missing or unsupported task scale uses the default model.
 
-Every `.py` file is a module.
+MinIO uses path-style S3 requests and region `us-east-1`. A missing bucket is created on startup; permission and connection errors fail startup.
 
-- The `from app.storage_client import Storage` statement means get the `Storage` in the folder `app`, file `storage_client.py`
-- Run a module inside a package with `python -m app.consumer` so imports resolve; plain `python main.py` works because `main.py` sits at the project root.
+## Standalone image processing
 
-Checks whether your Python file is being run directly or being imported as a module into another script
-
-```py
-if __name__ == "__main__":
-    print("Hello, World!")
+```sh
+npm run upscale -- assets/images/original.jpg assets/images/upscaled_x4.png --scale 4
+# Optional: --weights path/to/model.onnx (or WEIGHTS_PATH for this CLI only)
+npm run try-upscale
 ```
 
-Every module in `app/` uses this to ship a standalone smoke test: importing `app.storage_client` from `main.py` does nothing extra, but running
-`python -m app.storage_client` executes the round-trip test at the bottom.
+Output is always PNG, regardless of the output filename. Alpha is discarded and grayscale inputs are expanded to RGB. The network upscales the luminance channel; chroma uses bicubic interpolation. Small pixel differences from the former OpenCV implementation are expected.
 
-### Classes
+## Queue contract
 
-A class bundles data and the functions that operate on it.
+Input queue `upscale.tasks`:
 
-- Names with a leading underscore are private by **convention** only
-- To inherit from a parent class, pass the name of the parent class inside parentheses when defining the child class
-
-```py
-from torch import nn
-class FSRCNN(nn.Module):
+```json
+{
+  "task_id": "abc123",
+  "input_key": "uploads/photo.png",
+  "output_key": "results/photo.png",
+  "scale": 3
+}
 ```
 
-```py
-class Storage:
-    def __init__(self, bucket):   # constructor, runs on Storage(...)
-        self.bucket = bucket      # self = this instance; attributes live on it
+Results queue `upscale.results`:
 
-    def download(self, key):      # method; self is passed automatically
-        ...
-
-storage = Storage("images")       # create an instance
-storage.download("photo.png")     # call a method
+```json
+{ "task_id": "abc123", "status": "processing" }
 ```
 
-### Context Managers (`with` blocks)
+Statuses are `processing`, `done`, and `failed`. Tasks without an ID emit no status. Both queues are durable; prefetch is one, heartbeat is 600 seconds, and reconnect delay is five seconds. Malformed JSON/non-object messages are rejected without requeue. Processing failures emit `failed` and reject without requeue. Terminal status publication is confirmed before acknowledging/rejecting the task. A broker disconnect can cause redelivery and duplicate statuses; output writes use the same key. SIGINT/SIGTERM cancel consumption, finish the current task, and close resources.
 
-```py
-# `switches something on for the indented block and
-# guarantees it's switched back off after, even if an error occurs
-with torch.no_grad():
+## Models and dependencies
 
-# for files
-with open(path) as f:
+- `amqplib`: RabbitMQ AMQP 0-9-1 client.
+- `@aws-sdk/client-s3`: S3/MinIO storage.
+- `sharp`: image decoding, chroma resizing, and PNG encoding.
+- `onnxruntime-node`: CPU FSRCNN inference, one inference thread per model session.
+
+Models originate from https://github.com/yjn870/FSRCNN-pytorch and were converted from this repository's original weights to ONNX opset 17. Each model accepts float32 `[1, 1, height, width]` normalized luminance and returns `[1, 1, height * scale, width * scale]`. Height and width are dynamic. `assets/weights/provenance.json` records source and exported SHA-256 checksums and conversion versions. Python conversion tooling is intentionally not retained.
+
+## Project layout
+
+```text
+src/
+  index.js       # Startup, task processing, and shutdown
+  config.js      # Environment settings
+  consumer.js    # RabbitMQ consumption and status updates
+  storage.js     # S3 download and upload functions
+  upscaler.js    # Load ONNX models and upscale images
+  cli.js         # Standalone image command
+assets/
+  images/        # Sample images
+  weights/       # ONNX models and provenance
 ```
+
+Plain ES modules and functions, with direct calls to the package APIs. No classes or test-only dependency injection.
+
+```sh
+npm run try-upscale
+npm run format
+npm run format:check
+```
+
+The worker test suite and reference fixtures have been removed. For a live check, run the worker with RabbitMQ and MinIO, submit each scale through the scheduler, and verify status updates and downloadable PNG output.
